@@ -375,9 +375,9 @@ def pnl_modular_gaussian_ts(NClass=5):
             edge_weights = np.random.uniform(-1.25, 1.25,(NClass, len(edge_pairs)))
 
         # get modulation parameters
-        varMat = np.random.uniform(0.01, 3, (NClass, obs_latent_size))
+        varMat = np.random.uniform(0.01, 1, (NClass, obs_latent_size))
         if varyMean:
-            meanMat = np.random.uniform(-3, 3, (NClass, obs_latent_size))
+            meanMat = np.random.uniform(-0.5, 0.5, (NClass, obs_latent_size))
         else:
             meanMat = np.zeros((NClass, obs_latent_size))
 

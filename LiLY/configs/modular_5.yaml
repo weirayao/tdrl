@@ -31,7 +31,7 @@ VAE:
     LR: 5.0e-4
     BETA: 2.0e-3
     GAMMA: 2.0e-2
-    SIMGA: 5.0e-4
+    SIMGA: 1.0e-2
     BIAS: FALSE
     ENC:
         HIDDEN_DIM: 128
