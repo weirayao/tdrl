@@ -68,6 +68,7 @@ def main(args):
                           order=cfg['SPLINE']['ORDER'],
                           beta=cfg['VAE']['BETA'],
                           gamma=cfg['VAE']['GAMMA'],
+                          sigma=cfg['VAE']['SIMGA'],
                           decoder_dist=cfg['VAE']['DEC']['DIST'],
                           correlation=cfg['MCC']['CORR'])
 

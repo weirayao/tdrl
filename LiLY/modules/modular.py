@@ -141,7 +141,7 @@ class ModularShifts(pl.LightningModule):
         x_flat = x.view(-1, self.input_dim)
         dyn_embeddings = self.dyn_embed_func(c)
         obs_embeddings = self.obs_embed_func(c)
-        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1).reshape(-1,self.obs_embedding_dim)
+        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
         # Inference
         x_recon, mus, logvars, zs = self.net(x_flat)
         # Reshape to time-series format
@@ -171,13 +171,12 @@ class ModularShifts(pl.LightningModule):
         future_kld_dyn = future_kld_dyn.mean()
 
         ### Observation parts ###
-        z_tilde, logabsdet = self.flow(zs[:,:,self.dyn_dim:].view(-1, self.obs_dim), obs_embeddings)
-        z_tilde = z_tilde.reshape(batch_size, length, self.obs_dim)
-        logabsdet = torch.sum(logabsdet.reshape(batch_size,length), dim=1)
-        log_pz_obs = torch.sum(self.obs_base_dist.log_prob(z_tilde), dim=1) + logabsdet
+        p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                              torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+        log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
         log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
         kld_obs = log_qz_obs - log_pz_obs
-        kld_obs = kld_obs.mean()        
+        kld_obs = kld_obs.mean()      
 
         # VAE training
         loss = recon_loss + self.beta * past_kld_dyn + self.gamma * future_kld_dyn + self.sigma * kld_obs
@@ -195,7 +194,7 @@ class ModularShifts(pl.LightningModule):
         x_flat = x.view(-1, self.input_dim)
         dyn_embeddings = self.dyn_embed_func(c)
         obs_embeddings = self.obs_embed_func(c)
-        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1).reshape(-1,self.obs_embedding_dim)
+        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
         # Inference
         x_recon, mus, logvars, zs = self.net(x_flat)
         # Reshape to time-series format
@@ -225,20 +224,19 @@ class ModularShifts(pl.LightningModule):
         future_kld_dyn = future_kld_dyn.mean()
 
         ### Observation parts ###
-        z_tilde, logabsdet = self.flow(zs[:,:,self.dyn_dim:].view(-1, self.obs_dim), obs_embeddings)
-        z_tilde = z_tilde.reshape(batch_size, length, self.obs_dim)
-        logabsdet = torch.sum(logabsdet.reshape(batch_size,length), dim=1)
-        log_pz_obs = torch.sum(self.obs_base_dist.log_prob(z_tilde), dim=1) + logabsdet
+        p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                              torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+        log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
         log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
         kld_obs = log_qz_obs - log_pz_obs
-        kld_obs = kld_obs.mean()        
+        kld_obs = kld_obs.mean()      
 
         # VAE training
         loss = recon_loss + self.beta * past_kld_dyn + self.gamma * future_kld_dyn + self.sigma * kld_obs
 
         # Compute Mean Correlation Coefficient (MCC)
         zt_recon = mus.view(-1, self.z_dim).T.detach().cpu().numpy()
-        
+
         zt_true = batch["yt"].view(-1, self.z_dim).T.detach().cpu().numpy()
         mcc = compute_mcc(zt_recon, zt_true, self.correlation)
 
