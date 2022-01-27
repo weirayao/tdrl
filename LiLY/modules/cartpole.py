@@ -6,7 +6,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 import torch.distributions as D
 from torch.nn import functional as F
-from .components.beta import BetaVAE_MLP
+from .components.beta import BetaVAE_CNN
 from .components.transition import (MBDTransitionPrior, 
                                     NPChangeTransitionPrior)
 from .components.mlp import MLPEncoder, MLPDecoder, Inference
@@ -26,14 +26,11 @@ class ModularShifts(pl.LightningModule):
         lag,
         nclass,
         hidden_dim=128,
-        dyn_embedding_dim=2,
-        obs_embedding_dim=2,
+        dyn_embedding_dim=3,
+        obs_embedding_dim=0,
         trans_prior='NP',
         lr=1e-4,
         infer_mode='F',
-        bound=5,
-        count_bins=8,
-        order='linear',
         beta=0.0025,
         gamma=0.0075,
         sigma=0.0025,
@@ -60,36 +57,38 @@ class ModularShifts(pl.LightningModule):
         self.decoder_dist = decoder_dist
         self.infer_mode = infer_mode
         # Domain embeddings (dynamics)
-        self.dyn_embed_func = nn.Embedding(nclass, dyn_embedding_dim)
-        self.obs_embed_func = nn.Embedding(nclass, obs_embedding_dim)
-        # Flow for nonstationary regimes
-        self.flow = ComponentWiseCondSpline(input_dim=self.obs_dim,
-                                            context_dim=obs_embedding_dim,
-                                            bound=bound,
-                                            count_bins=count_bins,
-                                            order=order)
-        # Factorized inference
-        self.net = BetaVAE_MLP(input_dim=input_dim, 
-                                z_dim=self.z_dim, 
-                                hidden_dim=hidden_dim)
+        if dyn_embedding_dim > 0:
+            self.dyn_embed_func = nn.Embedding(nclass, dyn_embedding_dim)
+        if obs_embedding_dim > 0:
+            self.obs_embed_func = nn.Embedding(nclass, obs_embedding_dim)
 
+        # Factorized inference
+        self.net = BetaVAE_CNN(nc=1, 
+                               z_dim=self.z_dim,
+                               hidden_dim=hidden_dim)
+        transition_priors = [ ]
         # Initialize transition prior
-        if trans_prior == 'L':
-            self.transition_prior = MBDTransitionPrior(lags=lag, 
-                                                       latent_size=self.dyn_dim, 
-                                                       bias=False)
-        elif trans_prior == 'NP':
-            self.transition_prior = NPChangeTransitionPrior(lags=lag, 
-                                                            latent_size=self.dyn_dim,
-                                                            embedding_dim=dyn_embedding_dim,
-                                                            num_layers=4, 
-                                                            hidden_dim=hidden_dim)
+        for i in range(2):
+            if trans_prior == 'L':
+                transition_prior = MBDTransitionPrior(lags=lag, 
+                                                      latent_size=self.dyn_dim, 
+                                                      bias=False)
+            elif trans_prior == 'NP':
+                transition_prior = NPChangeTransitionPrior(lags=lag, 
+                                                           latent_size=self.dyn_dim,
+                                                           embedding_dim=dyn_embedding_dim,
+                                                           num_layers=4, 
+                                                           hidden_dim=hidden_dim)
+            transition_priors.append(transition_prior)
+        self.transition_priors = nn.ModuleList(transition_priors)
 
         # base distribution for calculation of log prob under the model
-        self.register_buffer('dyn_base_dist_mean', torch.zeros(self.dyn_dim))
-        self.register_buffer('dyn_base_dist_var', torch.eye(self.dyn_dim))
-        self.register_buffer('obs_base_dist_mean', torch.zeros(self.obs_dim))
-        self.register_buffer('obs_base_dist_var', torch.eye(self.obs_dim))
+        if self.dyn_dim > 0:
+            self.register_buffer('dyn_base_dist_mean', torch.zeros(self.dyn_dim))
+            self.register_buffer('dyn_base_dist_var', torch.eye(self.dyn_dim))
+        if self.obs_dim > 0:
+            self.register_buffer('obs_base_dist_mean', torch.zeros(self.obs_dim))
+            self.register_buffer('obs_base_dist_var', torch.eye(self.obs_dim))
 
     @property
     def dyn_base_dist(self):
@@ -135,17 +134,20 @@ class ModularShifts(pl.LightningModule):
         return zs, mus, logvars       
 
     def training_step(self, batch, batch_idx):
-        x, y, c = batch['xt'], batch['yt'], batch['ct']
+        x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
         c = torch.squeeze(c).to(torch.int64)
-        batch_size, length, _ = x.shape
-        x_flat = x.view(-1, self.input_dim)
-        dyn_embeddings = self.dyn_embed_func(c)
-        obs_embeddings = self.obs_embed_func(c)
-        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
+        a = torch.squeeze(a).to(torch.int64)
+        batch_size, length, nc, h, w = x.shape
+        x_flat = x.view(-1, nc, h, w)
+        if self.dyn_dim > 0:
+            dyn_embeddings = self.dyn_embed_func(c)
+        if self.obs_dim > 0:
+            obs_embeddings = self.obs_embed_func(c)
+            obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
         # Inference
         x_recon, mus, logvars, zs = self.net(x_flat)
         # Reshape to time-series format
-        x_recon = x_recon.view(batch_size, length, self.input_dim)
+        x_recon = x_recon.view(batch_size, length, nc, h, w)
         mus = mus.reshape(batch_size, length, self.z_dim)
         logvars  = logvars.reshape(batch_size, length, self.z_dim)
         zs = zs.reshape(batch_size, length, self.z_dim)
@@ -172,19 +174,25 @@ class ModularShifts(pl.LightningModule):
             residuals_action, logabsdet_action = self.transition_priors[a_idx](zs[:,:,:self.dyn_dim], dyn_embeddings)
             residuals.append(residuals_action)
             logabsdet.append(logabsdet_action)
-        residuals = torch.stack(residuals) * action_mask
-        logabsdet = torch.stack(logabsdet) * action_mask
+        mask = F.one_hot(a, num_classes=2)
+        residuals = torch.stack(residuals, axis=1)
+        logabsdet = torch.stack(logabsdet, axis=1)
+        residuals = (residuals * mask[:,:,None,None]).sum(1)
+        logabsdet = (logabsdet * mask).sum(1)
         log_pz_future = torch.sum(self.dyn_base_dist.log_prob(residuals), dim=1) + logabsdet
         future_kld_dyn = (torch.sum(torch.sum(log_qz_future,dim=-1),dim=-1) - log_pz_future) / (length-self.lag)
         future_kld_dyn = future_kld_dyn.mean()
 
         ### Observation parts ###
-        p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
-                              torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
-        log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
-        log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
-        kld_obs = log_qz_obs - log_pz_obs
-        kld_obs = kld_obs.mean()      
+        if self.obs_dim > 0:
+            p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                                torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+            log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
+            log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
+            kld_obs = log_qz_obs - log_pz_obs
+            kld_obs = kld_obs.mean()
+        else:
+            kld_obs = 0      
 
         # VAE training
         loss = recon_loss + self.beta * past_kld_dyn + self.gamma * future_kld_dyn + self.sigma * kld_obs
@@ -196,17 +204,20 @@ class ModularShifts(pl.LightningModule):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        x, y, c = batch['xt'], batch['yt'], batch['ct']
+        x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
         c = torch.squeeze(c).to(torch.int64)
-        batch_size, length, _ = x.shape
-        x_flat = x.view(-1, self.input_dim)
-        dyn_embeddings = self.dyn_embed_func(c)
-        obs_embeddings = self.obs_embed_func(c)
-        obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
+        a = torch.squeeze(a).to(torch.int64)
+        batch_size, length, nc, h, w = x.shape
+        x_flat = x.view(-1, nc, h, w)
+        if self.dyn_dim > 0:
+            dyn_embeddings = self.dyn_embed_func(c)
+        if self.obs_dim > 0:
+            obs_embeddings = self.obs_embed_func(c)
+            obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
         # Inference
         x_recon, mus, logvars, zs = self.net(x_flat)
         # Reshape to time-series format
-        x_recon = x_recon.view(batch_size, length, self.input_dim)
+        x_recon = x_recon.view(batch_size, length, nc, h, w)
         mus = mus.reshape(batch_size, length, self.z_dim)
         logvars  = logvars.reshape(batch_size, length, self.z_dim)
         zs = zs.reshape(batch_size, length, self.z_dim)
@@ -226,26 +237,39 @@ class ModularShifts(pl.LightningModule):
         past_kld_dyn = past_kld_dyn.mean()
         # Future KLD #
         log_qz_future = log_qz[:,self.lag:]
-        residuals, logabsdet = self.transition_prior(zs[:,:,:self.dyn_dim], dyn_embeddings)
+        residuals = [ ]
+        logabsdet = [ ]
+        # Two action branches
+        for a_idx in range(2):
+            residuals_action, logabsdet_action = self.transition_priors[a_idx](zs[:,:,:self.dyn_dim], dyn_embeddings)
+            residuals.append(residuals_action)
+            logabsdet.append(logabsdet_action)
+        mask = F.one_hot(a, num_classes=2)
+        residuals = torch.stack(residuals, axis=1)
+        logabsdet = torch.stack(logabsdet, axis=1)
+        residuals = (residuals * mask[:,:,None,None]).sum(1)
+        logabsdet = (logabsdet * mask).sum(1)
         log_pz_future = torch.sum(self.dyn_base_dist.log_prob(residuals), dim=1) + logabsdet
         future_kld_dyn = (torch.sum(torch.sum(log_qz_future,dim=-1),dim=-1) - log_pz_future) / (length-self.lag)
         future_kld_dyn = future_kld_dyn.mean()
 
         ### Observation parts ###
-        p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
-                              torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
-        log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
-        log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
-        kld_obs = log_qz_obs - log_pz_obs
-        kld_obs = kld_obs.mean()      
+        if self.obs_dim > 0:
+            p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                                torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+            log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
+            log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
+            kld_obs = log_qz_obs - log_pz_obs
+            kld_obs = kld_obs.mean()
+        else:
+            kld_obs = 0      
 
         # VAE training
         loss = recon_loss + self.beta * past_kld_dyn + self.gamma * future_kld_dyn + self.sigma * kld_obs
 
         # Compute Mean Correlation Coefficient (MCC)
-        zt_recon = mus.view(-1, self.z_dim).T.detach().cpu().numpy()
-
-        zt_true = batch["yt"].view(-1, self.z_dim).T.detach().cpu().numpy()
+        zt_recon = mus[:,0].view(-1, self.z_dim).T.detach().cpu().numpy()
+        zt_true = batch["yt"][:,0].view(-1, 2).T.detach().cpu().numpy()
         mcc = compute_mcc(zt_recon, zt_true, self.correlation)
 
         self.log("val_mcc", mcc) 

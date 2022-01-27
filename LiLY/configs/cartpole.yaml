@@ -1,0 +1,40 @@
+#########################
+# Model Configurations  #
+#########################
+
+ROOT: '/srv/data/lily/data'
+LOG: '/srv/data/lily/log'
+DATASET: 'cartpole'
+
+VAE:
+    GPU: [0]
+    CPU: 8
+    TRAIN_BS: 64
+    VAL_BS: 256
+    EPOCHS: 100
+    N_VAL_SAMPLES: 1024
+    NCLASS: 29
+    LAG: 2
+    LENGTH: 1
+    INPUT_DIM: 9
+    DYN_DIM: 8
+    DYN_EMBED_DIM: 3
+    OBS_DIM: 0
+    OBS_EMBED_DIM: 0
+    INFER_MODE: 'F'
+    TRANS_PRIOR: 'NP'
+    LR: 1.0e-3
+    BETA: 0.001
+    GAMMA: 10
+    SIMGA: 1.0e-2
+    BIAS: FALSE
+    ENC:
+        HIDDEN_DIM: 128
+    DEC:
+        HIDDEN_DIM: 128
+        DIST: 'gaussian'
+    PIN: TRUE
+
+MCC:
+    FREQ: 0.01
+    CORR: 'Pearson' # 'Spearman'

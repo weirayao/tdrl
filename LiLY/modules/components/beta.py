@@ -51,7 +51,10 @@ class BetaVAE_CNN(nn.Module):
         self.z_dim = z_dim
         self.nc = nc
         self.encoder = nn.Sequential(
-            nn.Conv2d(nc, 32, 4, 2, 1),          # B,  32, 32, 32
+            nn.Conv2d(nc, 32, 4, 2, 1),          # B,  32, 64, 64
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.Conv2d(32, 32, 4, 2, 1),          # B,  32, 32, 32
             nn.BatchNorm2d(32),
             nn.ReLU(True),
             nn.Conv2d(32, 32, 4, 2, 1),          # B,  32, 16, 16
@@ -85,7 +88,10 @@ class BetaVAE_CNN(nn.Module):
             nn.ConvTranspose2d(32, 32, 4, 2, 1), # B,  32, 32, 32
             nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.ConvTranspose2d(32, nc, 4, 2, 1),  # B, nc, 64, 64
+            nn.ConvTranspose2d(32, 32, 4, 2, 1), # B,  32, 64, 64
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(32, nc, 4, 2, 1),  # B, nc, 128, 128
         )
 
         self.weight_init()
