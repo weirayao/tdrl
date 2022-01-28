@@ -11,7 +11,7 @@ from torch.nn import functional as F
 from LiLY.modules.components.beta import BetaVAE_MLP
 from LiLY.modules.metrics.correlation import compute_mcc
 from LiLY.modules.components.tc import Discriminator, permute_dims
-from LiLY.modules.components.transforms import ComponentWiseSpline
+from LiLY.modules.components.flow import ComponentWiseSpline
 from LiLY.modules.components.mlp import (MLPEncoder, 
                              MLPDecoder, 
                              Inference, 

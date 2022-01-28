@@ -13,8 +13,8 @@ class CartpoleDataset(Dataset):
     def __init__(self, directory, dataset='cartpole', transform='default'):
         super().__init__()
         self.path = os.path.join(directory, dataset)
-        self.domain_names = os.listdir(self.path)
-        self.num_domains = len(self.domain_names)
+        self.domain_names = ['v11','v12','v13','v14','v15','v16','v17','v18','v19','v20','v21']
+        self.num_domains = 11 #len(self.domain_names)
         self.datums_per_domain = 1000
         self.samples_per_datum = 40
         self.length = 3

@@ -6,7 +6,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.init as init
 from torch.autograd import Variable
-from leap.modules.components.keypoint import SpatialSoftmax
+from LiLY.modules.components.keypoint import SpatialSoftmax
 import ipdb as pdb
 
 def reparametrize(mu, logvar):

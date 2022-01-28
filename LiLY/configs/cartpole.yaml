@@ -7,23 +7,23 @@ LOG: '/srv/data/lily/log'
 DATASET: 'cartpole'
 
 VAE:
-    GPU: [0]
+    GPU: [1]
     CPU: 8
     TRAIN_BS: 64
     VAL_BS: 256
     EPOCHS: 100
     N_VAL_SAMPLES: 1024
-    NCLASS: 29
+    NCLASS: 11
     LAG: 2
     LENGTH: 1
     INPUT_DIM: 9
     DYN_DIM: 8
-    DYN_EMBED_DIM: 3
+    DYN_EMBED_DIM: 1
     OBS_DIM: 0
     OBS_EMBED_DIM: 0
     INFER_MODE: 'F'
     TRANS_PRIOR: 'NP'
-    LR: 1.0e-3
+    LR: 5.0e-4
     BETA: 0.001
     GAMMA: 10
     SIMGA: 1.0e-2

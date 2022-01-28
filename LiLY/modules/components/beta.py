@@ -105,6 +105,7 @@ class BetaVAE_CNN(nn.Module):
         distributions = self._encode(x)
         mu = distributions[:, :self.z_dim]
         logvar = distributions[:, self.z_dim:]
+        logvar = logvar - 2
         z = reparametrize(mu, logvar)
         x_recon = self._decode(z)
 
