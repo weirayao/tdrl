@@ -165,7 +165,53 @@ class TimeVaryingProcess(pl.LightningModule):
             zs, mus, logvars = self.inference(ft, random_sampling=True)
         elif self.infer_mode == 'F':
             _, mus, logvars, zs = self.net(x_flat)
-        return zs, mus, logvars       
+        return zs, mus, logvars  
+
+    def transfer(self, batch, embeddings):
+        x, y, c = batch['xt'], batch['yt'], batch['ct']
+        c = torch.squeeze(c).to(torch.int64)
+        batch_size, length, _ = x.shape
+        sum_log_abs_det_jacobians = 0
+        x_flat = x.view(-1, self.input_dim)
+
+        # embeddings = self.embed_func(c)
+        # Inference
+        if self.infer_mode == 'R':
+            ft = self.enc(x_flat)
+            ft = ft.view(batch_size, length, -1)
+            zs, mus, logvars = self.inference(ft)
+            zs_flat = zs.contiguous().view(-1, self.z_dim)
+            x_recon = self.dec(zs_flat)
+        elif self.infer_mode == 'F':
+            x_recon, mus, logvars, zs = self.net(x_flat)
+        # Reshape to time-series format
+        x_recon = x_recon.view(batch_size, length, self.input_dim)
+        mus = mus.reshape(batch_size, length, self.z_dim)
+        logvars  = logvars.reshape(batch_size, length, self.z_dim)
+        zs = zs.reshape(batch_size, length, self.z_dim)
+
+        # VAE ELBO loss: recon_loss + kld_loss
+        recon_loss = self.reconstruction_loss(x[:,:self.lag], x_recon[:,:self.lag], self.decoder_dist) + \
+        (self.reconstruction_loss(x[:,self.lag:], x_recon[:,self.lag:], self.decoder_dist))/(length-self.lag)
+        q_dist = D.Normal(mus, torch.exp(logvars / 2))
+        log_qz = q_dist.log_prob(zs)
+        # Past KLD
+        p_dist = D.Normal(torch.zeros_like(mus[:,:self.lag]), torch.ones_like(logvars[:,:self.lag]))
+        log_pz_normal = torch.sum(torch.sum(p_dist.log_prob(zs[:,:self.lag]),dim=-1),dim=-1)
+        log_qz_normal = torch.sum(torch.sum(log_qz[:,:self.lag],dim=-1),dim=-1)
+        kld_normal = log_qz_normal - log_pz_normal
+        kld_normal = kld_normal.mean()
+        # Future KLD
+        log_qz_laplace = log_qz[:,self.lag:]
+        residuals, logabsdet = self.transition_prior(zs, embeddings)
+        sum_log_abs_det_jacobians = sum_log_abs_det_jacobians + logabsdet
+        log_pz_laplace = torch.sum(self.base_dist.log_prob(residuals), dim=1) + sum_log_abs_det_jacobians
+        kld_laplace = (torch.sum(torch.sum(log_qz_laplace,dim=-1),dim=-1) - log_pz_laplace) / (length-self.lag)
+        kld_laplace = kld_laplace.mean()
+
+        # VAE training
+        loss = recon_loss + self.beta * kld_normal + self.gamma * kld_laplace
+        return loss        
 
     def training_step(self, batch, batch_idx):
         x, y, c = batch['xt'], batch['yt'], batch['ct']

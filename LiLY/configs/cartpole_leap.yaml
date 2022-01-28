@@ -6,27 +6,41 @@ ROOT: '/srv/data/lily/data'
 LOG: '/srv/data/lily/log'
 DATASET: 'cartpole'
 
+SPLINE:
+    USE_WARM_START: TRUE
+    TYPE: 'gaussian'
+    STEPS: 5000
+    LR: 0.001
+    CUDA: TRUE
+    BS: 64
+    LATENT_DIM: 8
+    BOUND: 5
+    BINS: 8
+    ORDER: 'linear'
+    PATH: '/srv/data/lily/ckpts/spline_cartpole.pth'
+
 VAE:
     GPU: [1]
     CPU: 8
-    TRAIN_BS: 256
+    TRAIN_BS: 64
     VAL_BS: 256
     EPOCHS: 100
     N_VAL_SAMPLES: 1024
-    NCLASS: 29
+    NCLASS: 11
     LAG: 2
+    NC: 1
     LENGTH: 1
-    INPUT_DIM: 9
     DYN_DIM: 8
+    L1: 0
     DYN_EMBED_DIM: 1
     OBS_DIM: 0
     OBS_EMBED_DIM: 0
     INFER_MODE: 'F'
     TRANS_PRIOR: 'NP'
-    LR: 1.0e-3
+    LR: 5.0e-4
     BETA: 0.001
-    GAMMA: 100
-    SIMGA: 1.0e-2
+    GAMMA: 10
+    SIGMA: 1.0e-6
     BIAS: FALSE
     ENC:
         HIDDEN_DIM: 128

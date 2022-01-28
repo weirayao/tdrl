@@ -127,11 +127,142 @@ class ModularShifts(pl.LightningModule):
         return recon_loss
 
     def forward(self, batch):
-        x, y, c = batch['xt'], batch['yt'], batch['ct']
-        batch_size, length, _ = x.shape
-        x_flat = x.view(-1, self.input_dim)
+        x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
+        batch_size, length, nc, h, w = x.shape
+        x_flat = x.view(-1, nc, h, w)
         _, mus, logvars, zs = self.net(x_flat)
         return zs, mus, logvars       
+
+    def transfer(self, batch, embeddings):
+        x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
+        c = torch.squeeze(c).to(torch.int64)
+        a = torch.squeeze(a).to(torch.int64)
+        batch_size, length, nc, h, w = x.shape
+        x_flat = x.view(-1, nc, h, w)
+        # if self.dyn_dim > 0:
+        #     dyn_embeddings = self.dyn_embed_func(c)
+        # if self.obs_dim > 0:
+        #     obs_embeddings = self.obs_embed_func(c)
+        #     obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
+        # Inference
+        x_recon, mus, logvars, zs = self.net(x_flat)
+        # Reshape to time-series format
+        x_recon = x_recon.view(batch_size, length, nc, h, w)
+        mus = mus.reshape(batch_size, length, self.z_dim)
+        zs = mus
+        logvars  = logvars.reshape(batch_size, length, self.z_dim)
+        zs = zs.reshape(batch_size, length, self.z_dim)
+
+        # VAE ELBO loss: recon_loss + kld_loss
+        recon_loss = self.reconstruction_loss(x[:,:self.lag], x_recon[:,:self.lag], self.decoder_dist) + \
+        (self.reconstruction_loss(x[:,self.lag:], x_recon[:,self.lag:], self.decoder_dist))/(length-self.lag)
+        q_dist = D.Normal(mus, torch.exp(logvars / 2))
+        log_qz = q_dist.log_prob(zs)
+
+        ### Dynamics parts ###
+        # Past KLD <=> N(0,1) #
+        p_dist = D.Normal(torch.zeros_like(mus[:,:self.lag,:self.dyn_dim]), torch.ones_like(logvars[:,:self.lag, :self.dyn_dim]))
+        log_pz_past = torch.sum(torch.sum(p_dist.log_prob(zs[:,:self.lag,:self.dyn_dim]),dim=-1),dim=-1)
+        log_qz_past = torch.sum(torch.sum(log_qz[:,:self.lag,:self.dyn_dim],dim=-1),dim=-1)
+        past_kld_dyn = log_qz_past - log_pz_past
+        past_kld_dyn = past_kld_dyn.mean()
+        # Future KLD #
+        log_qz_future = log_qz[:,self.lag:]
+        residuals = [ ]
+        logabsdet = [ ]
+        # Two action branches
+        for a_idx in range(2):
+            residuals_action, logabsdet_action = self.transition_priors[a_idx](zs[:,:,:self.dyn_dim], embeddings)
+            residuals.append(residuals_action)
+            logabsdet.append(logabsdet_action)
+        mask = F.one_hot(a, num_classes=2)
+        residuals = torch.stack(residuals, axis=1)
+        logabsdet = torch.stack(logabsdet, axis=1)
+        residuals = (residuals * mask[:,:,None,None]).sum(1)
+        logabsdet = (logabsdet * mask).sum(1)
+        log_pz_future = torch.sum(self.dyn_base_dist.log_prob(residuals), dim=1) + logabsdet
+        future_kld_dyn = (torch.sum(torch.sum(log_qz_future,dim=-1),dim=-1) - log_pz_future) / (length-self.lag)
+        future_kld_dyn = future_kld_dyn.mean()
+
+        ### Observation parts ###
+        if self.obs_dim > 0:
+            p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                                torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+            log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
+            log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
+            kld_obs = log_qz_obs - log_pz_obs
+            kld_obs = kld_obs.mean()
+        else:
+            kld_obs = 0      
+
+        # VAE training
+        loss = future_kld_dyn
+        return future_kld_dyn
+    
+    def validation_step(self, batch, batch_idx):
+        x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
+        c = torch.squeeze(c).to(torch.int64)
+        a = torch.squeeze(a).to(torch.int64)
+        batch_size, length, nc, h, w = x.shape
+        x_flat = x.view(-1, nc, h, w)
+        if self.dyn_dim > 0:
+            dyn_embeddings = self.dyn_embed_func(c)
+        if self.obs_dim > 0:
+            obs_embeddings = self.obs_embed_func(c)
+            obs_embeddings = obs_embeddings.reshape(batch_size,1,self.obs_embedding_dim).repeat(1,length,1)
+        # Inference
+        x_recon, mus, logvars, zs = self.net(x_flat)
+        # Reshape to time-series format
+        x_recon = x_recon.view(batch_size, length, nc, h, w)
+        mus = mus.reshape(batch_size, length, self.z_dim)
+        logvars  = logvars.reshape(batch_size, length, self.z_dim)
+        zs = zs.reshape(batch_size, length, self.z_dim)
+
+        # VAE ELBO loss: recon_loss + kld_loss
+        recon_loss = self.reconstruction_loss(x[:,:self.lag], x_recon[:,:self.lag], self.decoder_dist) + \
+        (self.reconstruction_loss(x[:,self.lag:], x_recon[:,self.lag:], self.decoder_dist))/(length-self.lag)
+        q_dist = D.Normal(mus, torch.exp(logvars / 2))
+        log_qz = q_dist.log_prob(zs)
+
+        ### Dynamics parts ###
+        # Past KLD <=> N(0,1) #
+        p_dist = D.Normal(torch.zeros_like(mus[:,:self.lag,:self.dyn_dim]), torch.ones_like(logvars[:,:self.lag, :self.dyn_dim]))
+        log_pz_past = torch.sum(torch.sum(p_dist.log_prob(zs[:,:self.lag,:self.dyn_dim]),dim=-1),dim=-1)
+        log_qz_past = torch.sum(torch.sum(log_qz[:,:self.lag,:self.dyn_dim],dim=-1),dim=-1)
+        past_kld_dyn = log_qz_past - log_pz_past
+        past_kld_dyn = past_kld_dyn.mean()
+        # Future KLD #
+        log_qz_future = log_qz[:,self.lag:]
+        residuals = [ ]
+        logabsdet = [ ]
+        # Two action branches
+        for a_idx in range(2):
+            residuals_action, logabsdet_action = self.transition_priors[a_idx](zs[:,:,:self.dyn_dim], dyn_embeddings)
+            residuals.append(residuals_action)
+            logabsdet.append(logabsdet_action)
+        mask = F.one_hot(a, num_classes=2)
+        residuals = torch.stack(residuals, axis=1)
+        logabsdet = torch.stack(logabsdet, axis=1)
+        residuals = (residuals * mask[:,:,None,None]).sum(1)
+        logabsdet = (logabsdet * mask).sum(1)
+        log_pz_future = torch.sum(self.dyn_base_dist.log_prob(residuals), dim=1) + logabsdet
+        future_kld_dyn = (torch.sum(torch.sum(log_qz_future,dim=-1),dim=-1) - log_pz_future) / (length-self.lag)
+        future_kld_dyn = future_kld_dyn.mean()
+
+        ### Observation parts ###
+        if self.obs_dim > 0:
+            p_dist_obs = D.Normal(obs_embeddings[:,:,0].reshape(batch_size, length, 1), 
+                                torch.exp(obs_embeddings[:,:,1].reshape(batch_size, length, 1) / 2) )
+            log_pz_obs = torch.sum(torch.sum(p_dist_obs.log_prob(zs[:,:,self.dyn_dim:]), dim=1),dim=-1)
+            log_qz_obs = torch.sum(torch.sum(log_qz[:,:self.lag,self.dyn_dim:],dim=-1),dim=-1)
+            kld_obs = log_qz_obs - log_pz_obs
+            kld_obs = kld_obs.mean()
+        else:
+            kld_obs = 0      
+
+        # VAE training
+        loss = recon_loss + self.beta * past_kld_dyn + self.gamma * future_kld_dyn + self.sigma * kld_obs
+        return loss  
 
     def training_step(self, batch, batch_idx):
         x, y, a, c = batch['xt'], batch['yt'], batch['at'], batch['ct']
