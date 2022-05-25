@@ -9,7 +9,6 @@ Further details are documented within the code.
 To install it, create a conda environment with `Python>=3.7` and follow the instructions below. Note, that the current implementation of LEAP requires a GPU.
 ```
 conda create -n lily python=3.7
-cd lily
 pip install -e .
 ```
 
