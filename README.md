@@ -15,6 +15,6 @@ pip install -e .
 
 ### Datasets
 
-- Synthetic data: `python lily/datasets/gen_dataset.py `
-- Modified Cartpole: 
+- Synthetic data: `python LiLY/tools/gen_dataset.py `
+- Modified Cartpole: `python LiLY/tools/extract_new.py`
 - CMU Mocap databse: http://mocap.cs.cmu.edu/
