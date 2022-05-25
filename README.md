@@ -1,7 +1,7 @@
 # Causal Disentanglement for Time Series
 Experiment results are showcased in Jupyter Notebooks in `/tests` folder. Each notebook contains the scripts for analysis and visualization for one specific experiment.
 
-Run the scripts in `/LiLY/scripts` to generate results for experiment.
+Run the scripts in `scripts/run.sh` to generate results for experiment.
 
 Further details are documented within the code.
 
