@@ -1,4 +1,4 @@
-# Causal Disentanglement for Time Series
+# Temporally Disentangled Representation Learning
 Experiment results are showcased in Jupyter Notebooks in `/tests` folder. Each notebook contains the scripts for analysis and visualization for one specific experiment.
 
 Run the scripts in `scripts/run.sh` to generate results for experiment.
